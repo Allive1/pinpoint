@@ -214,7 +214,7 @@ public class HttpRequestExecutorExecuteMethodInterceptor implements AroundInterc
                     recorder.recordAttribute(AnnotationKey.HTTP_STATUS_CODE, statusCodeValue);
                 }
             }
-
+            recorder.recordError(true);
             recorder.recordApi(methodDescriptor);
             recorder.recordException(throwable);
 

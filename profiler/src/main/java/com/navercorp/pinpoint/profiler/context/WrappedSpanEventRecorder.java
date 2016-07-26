@@ -45,6 +45,16 @@ public class WrappedSpanEventRecorder extends AbstractRecorder implements SpanEv
     }
 
     @Override
+    public void recordError(boolean markError){
+        if (markError) {
+            final Span span = spanEvent.getSpan();
+            if (span.getErrCode() != 200) {
+                span.setErrCode(1);
+            }
+        }
+    }
+
+    @Override
     public ParsingResult recordSqlInfo(String sql) {
         if (sql == null) {
             return null;

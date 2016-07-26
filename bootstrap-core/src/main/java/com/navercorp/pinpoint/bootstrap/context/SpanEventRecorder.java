@@ -5,6 +5,8 @@ import com.navercorp.pinpoint.common.trace.ServiceType;
 
 public interface SpanEventRecorder extends FrameAttachment {
 
+    void recordError(boolean markError);
+
     void recordTime(boolean time);
     
     void recordException(Throwable throwable);
