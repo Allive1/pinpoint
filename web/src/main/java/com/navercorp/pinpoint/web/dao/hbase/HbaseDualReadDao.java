@@ -2,12 +2,11 @@ package com.navercorp.pinpoint.web.dao.hbase;
 
 import com.google.common.annotations.Beta;
 import com.navercorp.pinpoint.common.server.bo.SpanBo;
+import com.navercorp.pinpoint.common.util.TransactionId;
 import com.navercorp.pinpoint.web.dao.TraceDao;
-import com.navercorp.pinpoint.web.vo.TransactionId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collection;
 import java.util.List;
 
 /**
@@ -54,25 +53,6 @@ public class HbaseDualReadDao implements TraceDao {
         return result;
     }
 
-    @Override
-    public List<SpanBo> selectSpanAndAnnotation(TransactionId transactionId) {
-        Throwable masterThrowable = null;
-        List<SpanBo> result = null;
-        try {
-            result = master.selectSpanAndAnnotation(transactionId);
-        } catch (Throwable th) {
-            masterThrowable = th;
-        }
-        try {
-            slave.selectSpanAndAnnotation(transactionId);
-        } catch (Throwable th) {
-            logger.debug("slave error :{}", th.getMessage(), th);
-        }
-
-        rethrowRuntimeException(masterThrowable);
-
-        return result;
-    }
 
     @Override
     public List<List<SpanBo>> selectSpans(List<TransactionId> transactionIdList) {
@@ -95,7 +75,7 @@ public class HbaseDualReadDao implements TraceDao {
     }
 
     @Override
-    public List<List<SpanBo>> selectAllSpans(Collection<TransactionId> transactionIdList) {
+    public List<List<SpanBo>> selectAllSpans(List<TransactionId> transactionIdList) {
         Throwable masterThrowable = null;
         List<List<SpanBo>> result = null;
         try {
@@ -105,26 +85,6 @@ public class HbaseDualReadDao implements TraceDao {
         }
         try {
             slave.selectAllSpans(transactionIdList);
-        } catch (Throwable th) {
-            logger.debug("slave error :{}", th.getMessage(), th);
-        }
-
-        rethrowRuntimeException(masterThrowable);
-
-        return result;
-    }
-
-    @Override
-    public List<SpanBo> selectSpans(TransactionId transactionId) {
-        Throwable masterThrowable = null;
-        List<SpanBo> result = null;
-        try {
-            result = master.selectSpans(transactionId);
-        } catch (Throwable th) {
-            masterThrowable = th;
-        }
-        try {
-            slave.selectSpans(transactionId);
         } catch (Throwable th) {
             logger.debug("slave error :{}", th.getMessage(), th);
         }

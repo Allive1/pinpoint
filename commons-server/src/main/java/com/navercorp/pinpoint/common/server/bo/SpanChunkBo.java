@@ -1,15 +1,14 @@
 package com.navercorp.pinpoint.common.server.bo;
 
-import com.navercorp.pinpoint.thrift.dto.TSpanEvent;
+import com.navercorp.pinpoint.common.util.TransactionId;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * @author Woonduk Kang(emeroad)
  */
-public class SpanChunkBo {
+public class SpanChunkBo implements BasicSpan {
 
     private byte version = 0;
 
@@ -17,14 +16,19 @@ public class SpanChunkBo {
     private String applicationId;
     private long agentStartTime;
 
-    private String traceAgentId;
-    private long traceAgentStartTime;
-    private long traceTransactionSequence;
+    private TransactionId transactionId;
 
     private long spanId;
+    private String endPoint;
+
+    private short serviceType;
+    private Short applicationServiceType;
 
     private List<SpanEventBo> spanEventBoList = new ArrayList<>();
+
     private long collectorAcceptTime;
+
+
 
     public SpanChunkBo() {
     }
@@ -61,28 +65,13 @@ public class SpanChunkBo {
         this.agentStartTime = agentStartTime;
     }
 
-    public String getTraceAgentId() {
-        return traceAgentId;
+    @Override
+    public TransactionId getTransactionId() {
+        return transactionId;
     }
 
-    public void setTraceAgentId(String traceAgentId) {
-        this.traceAgentId = traceAgentId;
-    }
-
-    public long getTraceAgentStartTime() {
-        return traceAgentStartTime;
-    }
-
-    public void setTraceAgentStartTime(long traceAgentStartTime) {
-        this.traceAgentStartTime = traceAgentStartTime;
-    }
-
-    public long getTraceTransactionSequence() {
-        return traceTransactionSequence;
-    }
-
-    public void setTraceTransactionSequence(long traceTransactionSequence) {
-        this.traceTransactionSequence = traceTransactionSequence;
+    public void setTransactionId(TransactionId transactionId) {
+        this.transactionId = transactionId;
     }
 
     public long getSpanId() {
@@ -93,12 +82,44 @@ public class SpanChunkBo {
         this.spanId = spanId;
     }
 
+    public String getEndPoint() {
+        return endPoint;
+    }
+
+    public void setEndPoint(String endPoint) {
+        this.endPoint = endPoint;
+    }
+
     public long getCollectorAcceptTime() {
         return collectorAcceptTime;
     }
 
     public void setCollectorAcceptTime(long collectorAcceptTime) {
         this.collectorAcceptTime = collectorAcceptTime;
+    }
+
+    public void setApplicationServiceType(Short applicationServiceType) {
+        this.applicationServiceType  = applicationServiceType;
+    }
+
+    public short getServiceType() {
+        return serviceType;
+    }
+
+    public void setServiceType(short serviceType) {
+        this.serviceType = serviceType;
+    }
+
+    public boolean hasApplicationServiceType() {
+        return applicationServiceType != null;
+    }
+
+    public short getApplicationServiceType() {
+        if (hasApplicationServiceType()) {
+            return this.applicationServiceType;
+        } else {
+            return this.serviceType;
+        }
     }
 
     public List<SpanEventBo> getSpanEventBoList() {
@@ -119,10 +140,11 @@ public class SpanChunkBo {
                 ", agentId='" + agentId + '\'' +
                 ", applicationId='" + applicationId + '\'' +
                 ", agentStartTime=" + agentStartTime +
-                ", traceAgentId='" + traceAgentId + '\'' +
-                ", traceAgentStartTime=" + traceAgentStartTime +
-                ", traceTransactionSequence=" + traceTransactionSequence +
+                ", transactionId=" + transactionId +
                 ", spanId=" + spanId +
+                ", endPoint='" + endPoint + '\'' +
+                ", serviceType=" + serviceType +
+                ", applicationServiceType=" + applicationServiceType +
                 ", spanEventBoList=" + spanEventBoList +
                 ", collectorAcceptTime=" + collectorAcceptTime +
                 '}';

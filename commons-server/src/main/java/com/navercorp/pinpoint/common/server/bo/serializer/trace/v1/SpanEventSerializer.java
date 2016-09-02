@@ -3,6 +3,7 @@ package com.navercorp.pinpoint.common.server.bo.serializer.trace.v1;
 import com.navercorp.pinpoint.common.buffer.AutomaticBuffer;
 import com.navercorp.pinpoint.common.buffer.Buffer;
 import com.navercorp.pinpoint.common.server.bo.AnnotationBo;
+import com.navercorp.pinpoint.common.server.bo.BasicSpan;
 import com.navercorp.pinpoint.common.server.bo.SpanEventBo;
 import com.navercorp.pinpoint.common.server.bo.serializer.HbaseSerializer;
 import com.navercorp.pinpoint.common.server.bo.serializer.SerializationContext;
@@ -19,7 +20,7 @@ import static com.navercorp.pinpoint.common.hbase.HBaseTables.TRACES_CF_TERMINAL
  * @author Woonduk Kang(emeroad)
  */
 @Component
-public class SpanEventSerializer implements HbaseSerializer<SpanEventBo, Put> {
+public class SpanEventSerializer implements HbaseSerializer<SpanEventEncodingContext, Put> {
 
     private AnnotationSerializer annotationSerializer;
 
@@ -29,11 +30,11 @@ public class SpanEventSerializer implements HbaseSerializer<SpanEventBo, Put> {
     }
 
     @Override
-    public void serialize(SpanEventBo spanEventBo, Put put, SerializationContext context) {
+    public void serialize(SpanEventEncodingContext spanEventEncodingContext, Put put, SerializationContext context) {
 
-        ByteBuffer rowId = writeQualifier(spanEventBo);
+        ByteBuffer rowId = writeQualifier(spanEventEncodingContext);
 
-        final ByteBuffer value = writeValue(spanEventBo);
+        final ByteBuffer value = writeValue(spanEventEncodingContext);
 
         final long acceptedTime = put.getTimeStamp();
 
@@ -41,23 +42,29 @@ public class SpanEventSerializer implements HbaseSerializer<SpanEventBo, Put> {
 
     }
 
-    private ByteBuffer writeQualifier(SpanEventBo spanEventBo) {
+    private ByteBuffer writeQualifier(SpanEventEncodingContext spanEventEncodingContext) {
+        SpanEventBo spanEventBo = spanEventEncodingContext.getSpanEventBo();
+        BasicSpan basicSpan = spanEventEncodingContext.getBasicSpan();
+
         final Buffer rowId = new AutomaticBuffer();
-        rowId.putLong(spanEventBo.getSpanId());
+        rowId.putLong(basicSpan.getSpanId());
         rowId.putShort(spanEventBo.getSequence());
         rowId.putInt(spanEventBo.getAsyncId());
         rowId.putShort(spanEventBo.getAsyncSequence());
         return rowId.wrapByteBuffer();
     }
 
-    public ByteBuffer writeValue(SpanEventBo spanEventBo) {
+    public ByteBuffer writeValue(SpanEventEncodingContext spanEventEncodingContext) {
+        SpanEventBo spanEventBo = spanEventEncodingContext.getSpanEventBo();
+        BasicSpan basicSpan = spanEventEncodingContext.getBasicSpan();
+
         final Buffer buffer = new AutomaticBuffer(512);
 
         buffer.putByte(spanEventBo.getVersion());
 
-        buffer.putPrefixedString(spanEventBo.getAgentId());
-        buffer.putPrefixedString(spanEventBo.getApplicationId());
-        buffer.putVLong(spanEventBo.getAgentStartTime());
+        buffer.putPrefixedString(basicSpan.getAgentId());
+        buffer.putPrefixedString(basicSpan.getApplicationId());
+        buffer.putVLong(basicSpan.getAgentStartTime());
 
         buffer.putVInt(spanEventBo.getStartElapsed());
         buffer.putVInt(spanEventBo.getEndElapsed());

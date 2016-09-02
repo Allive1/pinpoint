@@ -2,6 +2,7 @@ package com.navercorp.pinpoint.common.server.bo.serializer.trace.v2;
 
 import com.navercorp.pinpoint.common.buffer.Buffer;
 import com.navercorp.pinpoint.common.server.bo.AnnotationBo;
+import com.navercorp.pinpoint.common.server.bo.BasicSpan;
 import com.navercorp.pinpoint.common.server.bo.SpanBo;
 import com.navercorp.pinpoint.common.server.bo.SpanChunkBo;
 import com.navercorp.pinpoint.common.server.bo.SpanEventBo;
@@ -28,22 +29,22 @@ public class SpanDecoderV0 implements SpanDecoder {
     private static final AnnotationTranscoder transcoder = new AnnotationTranscoder();
 
     @Override
-    public void decode(Buffer qualifier, Buffer columnValue, SpanDecodingContext decodingContext, List<Object> out) {
+    public Object decode(Buffer qualifier, Buffer columnValue, SpanDecodingContext decodingContext) {
         final byte type = qualifier.readByte();
 
         if (SpanEncoder.TYPE_SPAN == type) {
 
             SpanBo span = readSpan(qualifier, columnValue, decodingContext);
-            out.add(span);
+            return span;
 
         } else if (SpanEncoder.TYPE_SPAN_CHUNK == type) {
 
             SpanChunkBo spanChunk = readSpanChunk(qualifier, columnValue, decodingContext);
-            out.add(spanChunk);
+            return spanChunk;
 
         } else {
             logger.warn("Unknown span type {}", type);
-            out.add(UNKNOWN);
+            return UNKNOWN;
         }
     }
 
@@ -51,14 +52,11 @@ public class SpanDecoderV0 implements SpanDecoder {
         final SpanChunkBo spanChunk = new SpanChunkBo();
 
         final TransactionId transactionId = decodingContext.getTransactionId();
-
-        spanChunk.setTraceAgentStartTime(transactionId.getAgentStartTime());
-        spanChunk.setTraceTransactionSequence(transactionId.getTransactionSequence());
+        spanChunk.setTransactionId(transactionId);
         spanChunk.setCollectorAcceptTime(decodingContext.getCollectorAcceptedTime());
 
 
-        SpanAdaptor spanAdaptor = new SpanChunkBoAdaptor(spanChunk);
-        SpanEventBo firstSpanEvent = readQualifier(spanAdaptor, qualifier);
+        SpanEventBo firstSpanEvent = readQualifier(spanChunk, qualifier);
 
         readSpanChunkValue(columnValue, spanChunk, firstSpanEvent, decodingContext);
 
@@ -70,13 +68,10 @@ public class SpanDecoderV0 implements SpanDecoder {
         final SpanBo span = new SpanBo();
 
         final TransactionId transactionId = decodingContext.getTransactionId();
-        span.setTraceAgentId(transactionId.getAgentId());
-        span.setTraceAgentStartTime(transactionId.getAgentStartTime());
-        span.setTraceTransactionSequence(transactionId.getTransactionSequence());
+        span.setTransactionId(transactionId);
         span.setCollectorAcceptTime(decodingContext.getCollectorAcceptedTime());
 
-        SpanAdaptor spanAdaptor = new SpanBoAdaptor(span);
-        SpanEventBo firstSpanEvent = readQualifier(spanAdaptor, qualifier);
+        SpanEventBo firstSpanEvent = readQualifier(span, qualifier);
 
         readSpanValue(columnValue, span, firstSpanEvent, decodingContext);
 
@@ -124,8 +119,8 @@ public class SpanDecoderV0 implements SpanDecoder {
             span.setParentSpanId(-1);
         }
 
-        final int startTimeDelta = buffer.readVInt();
-        final long startTime = startTimeDelta + span.getCollectorAcceptTime();
+        final long startTimeDelta = buffer.readVLong();
+        final long startTime = span.getCollectorAcceptTime() - startTimeDelta;
         span.setStartTime(startTime);
         span.setElapsed(buffer.readVInt());
 
@@ -363,7 +358,6 @@ public class SpanDecoderV0 implements SpanDecoder {
         byte[] valueBytes = buffer.readPrefixedBytes();
         Object value = transcoder.decode(valueType, valueBytes);
 
-        current.setValueType(valueType);
         current.setValue(value);
         return current;
     }
@@ -378,24 +372,24 @@ public class SpanDecoderV0 implements SpanDecoder {
         byte valueType = buffer.readByte();
         byte[] valueBytes = buffer.readPrefixedBytes();
         Object value = transcoder.decode(valueType, valueBytes);
-        annotation.setValueType(valueType);
+
         annotation.setValue(value);
         return annotation;
     }
 
 
-    private SpanEventBo readQualifier(SpanAdaptor span, Buffer buffer) {
+    private SpanEventBo readQualifier(BasicSpan basicSpan, Buffer buffer) {
         String applicationId = buffer.readPrefixedString();
-        span.setApplicationId(applicationId);
+        basicSpan.setApplicationId(applicationId);
 
         String agentId = buffer.readPrefixedString();
-        span.setAgentId(agentId);
+        basicSpan.setAgentId(agentId);
 
         long agentStartTime = buffer.readVLong();
-        span.setAgentStartTime(agentStartTime);
+        basicSpan.setAgentStartTime(agentStartTime);
 
         long spanId = buffer.readLong();
-        span.setSpanId(spanId);
+        basicSpan.setSpanId(spanId);
 
         int firstSpanEventSequence = buffer.readSVInt();
         if (firstSpanEventSequence == -1) {
@@ -427,76 +421,5 @@ public class SpanDecoderV0 implements SpanDecoder {
     }
 
 
-    // resolve type miss match
-    private interface SpanAdaptor {
-        void setApplicationId(String applicationId);
 
-        void setAgentId(String agentId);
-
-        void setAgentStartTime(long agentStartTime);
-
-        void setSpanId(long spanId);
-    }
-
-    private static class SpanBoAdaptor implements SpanAdaptor {
-        private SpanBo spanBo;
-
-        private SpanBoAdaptor(SpanBo spanBo) {
-            if (spanBo == null) {
-                throw new NullPointerException("spanBo must not be null");
-            }
-            this.spanBo = spanBo;
-        }
-
-        @Override
-        public void setApplicationId(String applicationId) {
-            this.spanBo.setApplicationId(applicationId);
-        }
-
-        @Override
-        public void setAgentId(String agentId) {
-            this.spanBo.setAgentId(agentId);
-        }
-
-        @Override
-        public void setAgentStartTime(long agentStartTime) {
-            this.spanBo.setAgentStartTime(agentStartTime);
-        }
-
-        @Override
-        public void setSpanId(long spanId) {
-            this.spanBo.setSpanId(spanId);
-        }
-    }
-
-    private static class SpanChunkBoAdaptor implements SpanAdaptor {
-        private SpanChunkBo spanChunkBo;
-
-        private SpanChunkBoAdaptor(SpanChunkBo spanChunkBo) {
-            if (spanChunkBo == null) {
-                throw new NullPointerException("spanChunkBo must not be null");
-            }
-            this.spanChunkBo = spanChunkBo;
-        }
-
-        @Override
-        public void setApplicationId(String applicationId) {
-            this.spanChunkBo.setApplicationId(applicationId);
-        }
-
-        @Override
-        public void setAgentId(String agentId) {
-            this.spanChunkBo.setAgentId(agentId);
-        }
-
-        @Override
-        public void setAgentStartTime(long agentStartTime) {
-            this.spanChunkBo.setAgentStartTime(agentStartTime);
-        }
-
-        @Override
-        public void setSpanId(long spanId) {
-            this.spanChunkBo.setSpanId(spanId);
-        }
-    }
 }

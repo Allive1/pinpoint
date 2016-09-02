@@ -17,23 +17,23 @@
 package com.navercorp.pinpoint.web.mapper;
 
 import com.google.common.annotations.Beta;
-import com.google.common.collect.LinkedHashMultimap;
+import com.google.common.collect.LinkedListMultimap;
+import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
-import com.navercorp.pinpoint.common.PinpointConstants;
 import com.navercorp.pinpoint.common.buffer.Buffer;
 import com.navercorp.pinpoint.common.buffer.OffsetFixedBuffer;
 import com.navercorp.pinpoint.common.hbase.HBaseTables;
 import com.navercorp.pinpoint.common.hbase.RowMapper;
+import com.navercorp.pinpoint.common.server.bo.BasicSpan;
 import com.navercorp.pinpoint.common.server.bo.SpanBo;
 import com.navercorp.pinpoint.common.server.bo.SpanChunkBo;
 import com.navercorp.pinpoint.common.server.bo.SpanEventBo;
+import com.navercorp.pinpoint.common.server.bo.SpanEventComparator;
+import com.navercorp.pinpoint.common.server.bo.serializer.RowKeyDecoder;
 import com.navercorp.pinpoint.common.server.bo.serializer.trace.v2.SpanDecoder;
 import com.navercorp.pinpoint.common.server.bo.serializer.trace.v2.SpanDecoderV0;
 import com.navercorp.pinpoint.common.server.bo.serializer.trace.v2.SpanDecodingContext;
-import com.navercorp.pinpoint.common.server.bo.serializer.trace.v2.SpanEncoder;
-import com.navercorp.pinpoint.common.util.BytesUtils;
 import com.navercorp.pinpoint.common.util.TransactionId;
-import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -41,12 +41,13 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 
 /**
  * @author emeroad
@@ -57,11 +58,18 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
 
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
 
-    public static final int AGENT_NAME_MAX_LEN = PinpointConstants.AGENT_NAME_MAX_LEN;
-    public static final int DISTRIBUTE_HASH_SIZE = 1;
-
     private final SpanDecoder spanDecoder = new SpanDecoderV0();
 
+    private final RowKeyDecoder<TransactionId> rowKeyDecoder;
+
+    @Autowired
+    public SpanMapperV2(@Qualifier("traceRowKeyDecoderV2") RowKeyDecoder<TransactionId> rowKeyDecoder) {
+        if (rowKeyDecoder == null) {
+            throw new NullPointerException("rowKeyDecoder must not be null");
+        }
+
+        this.rowKeyDecoder = rowKeyDecoder;
+    }
 
     @Override
     public List<SpanBo> mapRow(Result result, int rowNum) throws Exception {
@@ -71,11 +79,13 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
 
 
         byte[] rowKey = result.getRow();
-        final TransactionId transactionId = newTransactionId(rowKey, DISTRIBUTE_HASH_SIZE);
+        final TransactionId transactionId = this.rowKeyDecoder.decodeRowKey(rowKey);
 
         final Cell[] rawCells = result.rawCells();
 
-        final List<Object> out = new ArrayList<>(rawCells.length);
+        ListMultimap<AgentKey, SpanBo> spanMap = LinkedListMultimap.create();
+        List<SpanChunkBo> spanChunkList = new ArrayList<>();
+
         final SpanDecodingContext decodingContext = new SpanDecodingContext();
         decodingContext.setTransactionId(transactionId);
 
@@ -90,7 +100,21 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
                 final Buffer columnValue = new OffsetFixedBuffer(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength());
 
                 spanDecoder = resolveDecoder(columnValue);
-                spanDecoder.decode(qualifier, columnValue, decodingContext, out);
+                final Object decodeObject = spanDecoder.decode(qualifier, columnValue, decodingContext);
+                if (decodeObject instanceof SpanBo) {
+                    SpanBo spanBo = (SpanBo) decodeObject;
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("spanBo:{}", spanBo);
+                    }
+                    AgentKey agentKey = newAgentKey(spanBo);
+                    spanMap.put(agentKey, spanBo);
+                } else if (decodeObject instanceof SpanChunkBo) {
+                    SpanChunkBo spanChunkBo = (SpanChunkBo) decodeObject;
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("spanChunkBo:{}", spanChunkBo);
+                    }
+                    spanChunkList.add(spanChunkBo);
+                }
 
             } else {
                 logger.warn("Unknown ColumnFamily :{}", Bytes.toStringBinary(CellUtil.cloneFamily(cell)));
@@ -100,7 +124,7 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
         decodingContext.finish();
 
 
-        return buildSpanBoList(out);
+        return buildSpanBoList(spanMap, spanChunkList);
 
     }
 
@@ -121,70 +145,25 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
         }
     }
 
-    private TransactionId newTransactionId(byte[] rowKey, int offset) {
 
-        String agentId = BytesUtils.toStringAndRightTrim(rowKey, offset, AGENT_NAME_MAX_LEN);
-        long agentStartTime = BytesUtils.bytesToLong(rowKey, offset + AGENT_NAME_MAX_LEN);
-        long transactionSequence = BytesUtils.bytesToLong(rowKey, offset + BytesUtils.LONG_BYTE_LENGTH + AGENT_NAME_MAX_LEN);
-
-        return new TransactionId(agentId, agentStartTime, transactionSequence);
-    }
-
-    private List<SpanBo> buildSpanBoList(List<Object> out) {
-
-        LinkedHashMultimap<Long, SpanBo> spanMap = LinkedHashMultimap.create();
-        List<SpanChunkBo> spanChunkList = new ArrayList<>();
-        for (Object decodedSpan : out) {
-            if (decodedSpan instanceof SpanBo) {
-                SpanBo span = (SpanBo) decodedSpan;
-
-                spanMap.put(span.getSpanId(), span);
-
-            } else if (decodedSpan instanceof SpanChunkBo) {
-
-                SpanChunkBo spanChunk = (SpanChunkBo) decodedSpan;
-                spanChunkList.add(spanChunk);
-            } else {
-
-                logger.warn("Unknown span type {}", decodedSpan);
-            }
-        }
-
-
+    private List<SpanBo> buildSpanBoList(ListMultimap<AgentKey, SpanBo> spanMap, List<SpanChunkBo> spanChunkList) {
         List<SpanBo> spanBoList = bindSpanChunk(spanMap, spanChunkList);
-        bindAgentInfo(spanBoList);
+        sortSpanEvent(spanBoList);
         return spanBoList;
     }
 
-    private void sortSpanEvent(List<SpanEventBo> spanEventBoList) {
-        if (CollectionUtils.isEmpty(spanEventBoList)) {
-            return;
-        }
-        Collections.sort(spanEventBoList, SpanEncoder.SPAN_EVENT_SEQUENCE_COMPARATOR);
-    }
 
-    private void bindAgentInfo(List<SpanBo> spanBoList) {
-        // TODO workaround. fix class dependency
+    private void sortSpanEvent(List<SpanBo> spanBoList) {
         for (SpanBo spanBo : spanBoList) {
-
             List<SpanEventBo> spanEventBoList = spanBo.getSpanEventBoList();
-            sortSpanEvent(spanEventBoList);
-            for (SpanEventBo spanEventBo : spanEventBoList) {
-                spanEventBo.setAgentId(spanBo.getAgentId());
-                spanEventBo.setApplicationId(spanBo.getApplicationId());
-                spanEventBo.setAgentStartTime(spanBo.getAgentStartTime());
-
-                spanEventBo.setTraceAgentId(spanBo.getTraceAgentId());
-                spanEventBo.setTraceAgentStartTime(spanBo.getTraceAgentStartTime());
-                spanEventBo.setTraceTransactionSequence(spanBo.getTraceTransactionSequence());
-            }
+            Collections.sort(spanEventBoList, SpanEventComparator.INSTANCE);
         }
     }
 
-    private List<SpanBo> bindSpanChunk(LinkedHashMultimap<Long, SpanBo> spanMap, List<SpanChunkBo> spanChunkList) {
+    private List<SpanBo> bindSpanChunk(ListMultimap<AgentKey, SpanBo> spanMap, List<SpanChunkBo> spanChunkList) {
         for (SpanChunkBo spanChunkBo : spanChunkList) {
-            final Long spanId = spanChunkBo.getSpanId();
-            Set<SpanBo> matchedSpanBoList = spanMap.get(spanId);
+            AgentKey agentKey = newAgentKey(spanChunkBo);
+            List<SpanBo> matchedSpanBoList = spanMap.get(agentKey);
             if (matchedSpanBoList != null) {
                 final int spanIdCollisionSize = matchedSpanBoList.size();
                 if (spanIdCollisionSize > 1) {
@@ -205,10 +184,68 @@ public class SpanMapperV2 implements RowMapper<List<SpanBo>> {
                 }
             } else {
                 if (logger.isInfoEnabled()) {
-                    logger.info("Span not exist spanId:{} spanChunk:{}", spanId, spanChunkBo);
+                    logger.info("Span not exist spanId:{} spanChunk:{}", agentKey, spanChunkBo);
                 }
             }
         }
         return Lists.newArrayList(spanMap.values());
+    }
+
+    private AgentKey newAgentKey(BasicSpan basicSpan) {
+        return new AgentKey(basicSpan.getApplicationId(), basicSpan.getAgentId(), basicSpan.getAgentStartTime(), basicSpan.getSpanId());
+    }
+
+    public static class AgentKey {
+        private final long spanId;
+        private final String applicationId;
+        private final String agentId;
+        private final long agentStartTime;
+
+
+        public AgentKey(String applicationId, String agentId, long agentStartTime, long spanId) {
+            if (applicationId == null) {
+                throw new NullPointerException("applicationId must not be null");
+            }
+            if (agentId == null) {
+                throw new NullPointerException("agentId must not be null");
+            }
+            this.applicationId = applicationId;
+            this.agentId = agentId;
+            this.agentStartTime = agentStartTime;
+            this.spanId = spanId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            AgentKey agentKey = (AgentKey) o;
+
+            if (spanId != agentKey.spanId) return false;
+            if (agentStartTime != agentKey.agentStartTime) return false;
+            if (!applicationId.equals(agentKey.applicationId)) return false;
+            return agentId.equals(agentKey.agentId);
+
+        }
+
+        @Override
+        public int hashCode() {
+            int result = (int) (spanId ^ (spanId >>> 32));
+            result = 31 * result + applicationId.hashCode();
+            result = 31 * result + agentId.hashCode();
+            result = 31 * result + (int) (agentStartTime ^ (agentStartTime >>> 32));
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return "AgentKey{" +
+                    "spanId=" + spanId +
+                    ", applicationId='" + applicationId + '\'' +
+                    ", agentId='" + agentId + '\'' +
+                    ", agentStartTime=" + agentStartTime +
+                    '}';
+        }
     }
 }
